@@ -43,6 +43,7 @@ type Watcher struct {
 	nextKey uint32
 	closed  bool
 	done    chan struct{}
+	exited  chan struct{}
 }
 
 type winWatch struct {
@@ -71,6 +72,7 @@ func NewWatcher() (*Watcher, error) {
 		port:    port,
 		watches: make(map[uint32]*winWatch),
 		done:    make(chan struct{}),
+		exited:  make(chan struct{}),
 	}
 	go w.readLoop()
 	return w, nil
@@ -174,11 +176,14 @@ func (w *Watcher) Remove(path string) error {
 	return ErrNotAdded
 }
 
-// Close stops the watcher. Subsequent calls are no-ops.
+// Close stops the watcher. Subsequent calls are no-ops. Close blocks
+// until the read loop has fully exited so callers can rely on
+// Events/Errors being closed by the time Close returns.
 func (w *Watcher) Close() error {
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
+		<-w.exited
 		return nil
 	}
 	w.closed = true
@@ -191,7 +196,9 @@ func (w *Watcher) Close() error {
 	w.mu.Unlock()
 	// Wake any GetQueuedCompletionStatus waiter so the loop can observe done.
 	syscall.PostQueuedCompletionStatus(port, 0, 0, nil)
-	return syscall.CloseHandle(port)
+	err := syscall.CloseHandle(port)
+	<-w.exited
+	return err
 }
 
 func (ww *winWatch) startRead() error {
@@ -208,6 +215,7 @@ func (ww *winWatch) startRead() error {
 }
 
 func (w *Watcher) readLoop() {
+	defer close(w.exited)
 	defer close(w.Events)
 	defer close(w.Errors)
 
