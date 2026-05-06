@@ -66,7 +66,7 @@ Paths are canonicalized (absolute, cleaned, with symlinks resolved when the targ
 | Rename | A file or directory was renamed or moved.   |
 | Chmod  | Permissions or attributes changed.          |
 
-`Op` is a bitmask; combine values with `|` when calling `Add`.
+`Op` is a bitmask; combine values with `|` when calling `Add`. The `All` constant is shorthand for the union of every Op bit.
 
 ## Guarantees
 
