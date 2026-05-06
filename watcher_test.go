@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -440,4 +441,52 @@ func TestAddCaseInsensitiveOnWindows(t *testing.T) {
 	if err := w.Remove(upper); err != nil {
 		t.Errorf("Remove(uppercased) = %v, want nil", err)
 	}
+}
+
+func TestConcurrentAddClose(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		w, err := NewWatcher()
+		if err != nil {
+			t.Fatalf("NewWatcher: %v", err)
+		}
+		dir := t.TempDir()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			err := w.Add(dir, All)
+			if err != nil && !errors.Is(err, ErrClosed) {
+				t.Errorf("Add: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if err := w.Close(); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+		}()
+		wg.Wait()
+	}
+}
+
+func TestConcurrentAddDistinct(t *testing.T) {
+	w := newWatcher(t)
+	const n = 16
+	dirs := make([]string, n)
+	for i := range dirs {
+		dirs[i] = t.TempDir()
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for _, d := range dirs {
+		go func(d string) {
+			defer wg.Done()
+			if err := w.Add(d, All); err != nil {
+				t.Errorf("Add(%q): %v", d, err)
+			}
+		}(d)
+	}
+	wg.Wait()
 }
