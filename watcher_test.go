@@ -456,6 +456,47 @@ func TestAddCaseInsensitiveOnWindows(t *testing.T) {
 	}
 }
 
+func TestWatchFileWithSpace(t *testing.T) {
+	dir := tempDir(t)
+	w := newWatcher(t)
+	if err := w.Add(dir, Create); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	target := filepath.Join(dir, "a file with spaces.txt")
+	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ev := waitOp(t, w, Create)
+	if ev.Name != target {
+		t.Errorf("Name = %q, want %q", ev.Name, target)
+	}
+}
+
+func TestWatchDirWithSpace(t *testing.T) {
+	parent := tempDir(t)
+	dir := filepath.Join(parent, "dir with spaces")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	w := newWatcher(t)
+	if err := w.Add(dir, Create); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	target := filepath.Join(dir, "x.txt")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ev := waitOp(t, w, Create)
+	if ev.Name != target {
+		t.Errorf("Name = %q, want %q", ev.Name, target)
+	}
+}
+
 func TestConcurrentAddClose(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		w, err := NewWatcher()
