@@ -46,11 +46,14 @@ func main() {
 ## API
 
 - `NewWatcher() (*Watcher, error)` — creates a watcher.
-- `(*Watcher).Add(path string, op Op) error` — registers `path` with the given event mask. Returns an error if `path` is already registered.
-- `(*Watcher).Remove(path string) error` — unregisters `path`.
+- `(*Watcher).Add(path string, op Op) error` — registers `path` with the given event mask. Returns `ErrAlreadyAdded` if `path` is already registered.
+- `(*Watcher).AddRecursive(path string, op Op) error` — registers `path` and every directory under it. New subdirectories created inside are watched automatically; removed subdirectories are dropped. `Remove` may only be called on the original recursive root.
+- `(*Watcher).Remove(path string) error` — unregisters `path`. For an `AddRecursive` registration this drops the entire subtree.
 - `(*Watcher).Close() error` — stops the watcher and closes the channels.
 - `(*Watcher).Events <-chan Event` — receives change notifications.
 - `(*Watcher).Errors <-chan error` — receives non-fatal errors.
+
+Paths are canonicalized (absolute, cleaned, with symlinks resolved when the target exists; on Windows 8.3 short forms are expanded and case is folded), so two spellings of the same path dedupe and `Event.Name` is always returned in canonical form.
 
 ## Events
 
