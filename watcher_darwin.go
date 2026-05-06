@@ -29,6 +29,7 @@ type Watcher struct {
 	byFd   map[int]*kqWatch
 	closed bool
 	done   chan struct{}
+	exited chan struct{}
 }
 
 type kqWatch struct {
@@ -54,6 +55,7 @@ func NewWatcher() (*Watcher, error) {
 		roots:  make(map[string]*kqWatch),
 		byFd:   make(map[int]*kqWatch),
 		done:   make(chan struct{}),
+		exited: make(chan struct{}),
 	}
 	go w.readLoop()
 	return w, nil
@@ -146,11 +148,14 @@ func (w *Watcher) Remove(path string) error {
 	return nil
 }
 
-// Close stops the watcher. Subsequent calls are no-ops.
+// Close stops the watcher. Subsequent calls are no-ops. Close blocks
+// until the read loop has fully exited so callers can rely on
+// Events/Errors being closed by the time Close returns.
 func (w *Watcher) Close() error {
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
+		<-w.exited
 		return nil
 	}
 	w.closed = true
@@ -161,7 +166,9 @@ func (w *Watcher) Close() error {
 	w.roots = nil
 	kq := w.kq
 	w.mu.Unlock()
-	return syscall.Close(kq)
+	err := syscall.Close(kq)
+	<-w.exited
+	return err
 }
 
 func (w *Watcher) openLocked(path string, op Op, parent *kqWatch) (*kqWatch, error) {
@@ -209,6 +216,7 @@ func (w *Watcher) closeTreeLocked(ww *kqWatch) {
 }
 
 func (w *Watcher) readLoop() {
+	defer close(w.exited)
 	defer close(w.Events)
 	defer close(w.Errors)
 
