@@ -370,6 +370,29 @@ func TestAddDuplicateAcrossForms(t *testing.T) {
 	}
 }
 
+func TestSymlinkDeduplicates(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+	real := t.TempDir()
+	linkParent := t.TempDir()
+	link := filepath.Join(linkParent, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	w := newWatcher(t)
+	if err := w.Add(real, All); err != nil {
+		t.Fatalf("Add(real): %v", err)
+	}
+	if err := w.Add(link, All); !errors.Is(err, ErrAlreadyAdded) {
+		t.Errorf("Add(symlink) = %v, want ErrAlreadyAdded", err)
+	}
+	if err := w.Remove(link); err != nil {
+		t.Errorf("Remove(symlink) = %v, want nil", err)
+	}
+}
+
 func TestAddCaseInsensitiveOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-only")
