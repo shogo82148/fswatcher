@@ -19,9 +19,12 @@ const oEvtOnly = 0x8000
 // for files inside the directory, matching the Linux/Windows backends.
 type Watcher struct {
 	// Events delivers change notifications. Closed when Close returns.
-	Events chan Event
+	Events <-chan Event
 	// Errors delivers non-fatal errors from the read loop. Closed when Close returns.
-	Errors chan error
+	Errors <-chan error
+
+	events chan<- Event
+	errors chan<- error
 
 	mu     sync.Mutex
 	kq     int
@@ -66,9 +69,14 @@ func NewWatcher() (*Watcher, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	events := make(chan Event, 64)
+	errors := make(chan error, 8)
 	w := &Watcher{
-		Events: make(chan Event, 64),
-		Errors: make(chan error, 8),
+		Events: events,
+		Errors: errors,
+		events: events,
+		errors: errors,
 		kq:     kq,
 		roots:  make(map[string]*kqWatch),
 		byFd:   make(map[int]*kqWatch),
@@ -239,8 +247,8 @@ func (w *Watcher) closeTreeLocked(ww *kqWatch) {
 
 func (w *Watcher) readLoop() {
 	defer close(w.exited)
-	defer close(w.Events)
-	defer close(w.Errors)
+	defer close(w.events)
+	defer close(w.errors)
 
 	events := make([]syscall.Kevent_t, 16)
 	for {
@@ -368,14 +376,14 @@ func (w *Watcher) diffDir(dir *kqWatch, requested Op) {
 
 func (w *Watcher) sendEvent(e Event) {
 	select {
-	case w.Events <- e:
+	case w.events <- e:
 	case <-w.done:
 	}
 }
 
 func (w *Watcher) sendError(err error) {
 	select {
-	case w.Errors <- err:
+	case w.errors <- err:
 	case <-w.done:
 	}
 }

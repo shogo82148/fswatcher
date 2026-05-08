@@ -144,9 +144,12 @@ type fsStream struct {
 // Watcher monitors registered paths via macOS FSEvents.
 type Watcher struct {
 	// Events delivers change notifications. Closed when Close returns.
-	Events chan Event
+	Events <-chan Event
 	// Errors delivers non-fatal errors from the read loop. Closed when Close returns.
-	Errors chan error
+	Errors <-chan error
+
+	events chan<- Event
+	errors chan<- error
 
 	mu       sync.Mutex
 	id       uintptr
@@ -208,14 +211,18 @@ func NewWatcher() (*Watcher, error) {
 
 	queue := _dispatchQueueCreate("github.com/gofsnotify/fsnotify\x00", 0)
 
+	events := make(chan Event, 64)
+	errors := make(chan error, 8)
 	w := &Watcher{
-		Events:   make(chan Event, 64),
-		Errors:   make(chan error, 8),
+		Events:   events,
+		Errors:   errors,
 		queue:    queue,
 		streams:  make(map[string]*fsStream),
 		internal: make(chan Event, 256),
 		done:     make(chan struct{}),
 		exited:   make(chan struct{}),
+		events:   events,
+		errors:   errors,
 	}
 	w.id = registerWatcher(w)
 	go w.readLoop()
@@ -227,14 +234,14 @@ func NewWatcher() (*Watcher, error) {
 // Errors, and exited, matching the pattern of the other backends.
 func (w *Watcher) readLoop() {
 	defer close(w.exited)
-	defer close(w.Events)
-	defer close(w.Errors)
+	defer close(w.events)
+	defer close(w.errors)
 
 	for {
 		select {
 		case ev := <-w.internal:
 			select {
-			case w.Events <- ev:
+			case w.events <- ev:
 			case <-w.done:
 				return
 			}
@@ -518,7 +525,7 @@ func (w *Watcher) sendEvent(e Event) {
 
 func (w *Watcher) sendError(err error) {
 	select {
-	case w.Errors <- err:
+	case w.errors <- err:
 	case <-w.done:
 	}
 }
