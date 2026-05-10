@@ -156,7 +156,7 @@ type Watcher struct {
 	queue       uintptr // dispatch_queue_t
 	streams     map[string]*fsStream
 	cleanupW    sync.WaitGroup
-	internal    chan Event
+	internalEv  chan Event
 	internalErr chan error
 	closed      bool
 	done        chan struct{}
@@ -221,7 +221,7 @@ func NewWatcher() (*Watcher, error) {
 		errors:      errors,
 		queue:       queue,
 		streams:     make(map[string]*fsStream),
-		internal:    make(chan Event, 256),
+		internalEv:  make(chan Event, 256),
 		internalErr: make(chan error, 8),
 		done:        make(chan struct{}),
 		exited:      make(chan struct{}),
@@ -241,7 +241,7 @@ func (w *Watcher) readLoop() {
 
 	for {
 		select {
-		case ev := <-w.internal:
+		case ev := <-w.internalEv:
 			select {
 			case w.events <- ev:
 			case <-w.done:
@@ -526,7 +526,7 @@ func isUnder(child, parent string) bool {
 
 func (w *Watcher) sendEvent(e Event) {
 	select {
-	case w.internal <- e:
+	case w.internalEv <- e:
 	case <-w.done:
 	}
 }
