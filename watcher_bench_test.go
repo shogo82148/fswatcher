@@ -18,8 +18,7 @@ func BenchmarkAddRemove(b *testing.B) {
 	b.Cleanup(func() { _ = w.Close() })
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if err := w.Add(dir, All); err != nil {
 			b.Fatalf("Add: %v", err)
 		}
@@ -55,9 +54,8 @@ func BenchmarkEventThroughput(b *testing.B) {
 	}()
 
 	b.ReportAllocs()
-	b.ResetTimer()
 	payload := []byte("x")
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if err := os.WriteFile(target, payload, 0o644); err != nil {
 			b.Fatalf("WriteFile: %v", err)
 		}
@@ -77,8 +75,7 @@ func BenchmarkAddRecursive(b *testing.B) {
 			buildFlatTree(b, root, dirs)
 
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				w, err := NewWatcher()
 				if err != nil {
 					b.Fatalf("NewWatcher: %v", err)
