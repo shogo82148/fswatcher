@@ -5,12 +5,32 @@ package fsnotify
 import (
 	"strings"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 )
 
 // pathKey returns a comparison key for p. NTFS is case-insensitive, so
 // fold to lowercase before using a path as a map key.
 func pathKey(p string) string {
-	return strings.ToLower(p)
+	isASCII := true
+	for i := 0; i < len(p); i++ {
+		if p[i] >= utf8.RuneSelf {
+			isASCII = false
+			break
+		}
+	}
+	if isASCII { // optimize for ASCII-only strings.
+		return strings.ToLower(p)
+	}
+
+	return strings.Map(func(r rune) rune {
+		if r == 'ß' || r == 'ẞ' {
+			// NTFS is case-insensitive, but as an exception,
+			// it distinguishes between uppercase and lowercase Sharp S.
+			return r
+		}
+		return unicode.ToLower(r)
+	}, p)
 }
 
 // canonicalizeOS expands an 8.3 short-form path (e.g. C:\PROGRA~1) to
