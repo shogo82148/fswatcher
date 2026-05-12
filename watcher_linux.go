@@ -17,9 +17,12 @@ import (
 // Watcher monitors registered paths for file system changes via inotify.
 type Watcher struct {
 	// Events delivers change notifications. Closed when Close returns.
-	Events chan Event
+	Events <-chan Event
 	// Errors delivers non-fatal errors from the read loop. Closed when Close returns.
-	Errors chan error
+	Errors <-chan error
+
+	events chan<- Event
+	errors chan<- error
 
 	mu      sync.Mutex
 	fd      int
@@ -47,9 +50,14 @@ func NewWatcher() (*Watcher, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	events := make(chan Event, 64)
+	errors := make(chan error, 8)
 	w := &Watcher{
-		Events:  make(chan Event, 64),
-		Errors:  make(chan error, 8),
+		Events:  events,
+		Errors:  errors,
+		events:  events,
+		errors:  errors,
 		fd:      fd,
 		file:    os.NewFile(uintptr(fd), "inotify"),
 		watches: make(map[string]*linuxWatch),
@@ -196,8 +204,8 @@ func (w *Watcher) Close() error {
 
 func (w *Watcher) readLoop() {
 	defer close(w.exited)
-	defer close(w.Events)
-	defer close(w.Errors)
+	defer close(w.events)
+	defer close(w.errors)
 
 	var buf [4096]byte
 	for {
@@ -305,15 +313,19 @@ func (w *Watcher) dispatch(wd int32, mask uint32, name string) {
 	if op == 0 {
 		return
 	}
+	w.sendEvent(Event{Name: full, Op: op})
+}
+
+func (w *Watcher) sendEvent(e Event) {
 	select {
-	case w.Events <- Event{Name: full, Op: op}:
+	case w.events <- e:
 	case <-w.done:
 	}
 }
 
 func (w *Watcher) sendError(err error) {
 	select {
-	case w.Errors <- err:
+	case w.errors <- err:
 	case <-w.done:
 	}
 }

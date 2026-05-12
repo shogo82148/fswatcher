@@ -144,19 +144,23 @@ type fsStream struct {
 // Watcher monitors registered paths via macOS FSEvents.
 type Watcher struct {
 	// Events delivers change notifications. Closed when Close returns.
-	Events chan Event
+	Events <-chan Event
 	// Errors delivers non-fatal errors from the read loop. Closed when Close returns.
-	Errors chan error
+	Errors <-chan error
 
-	mu       sync.Mutex
-	id       uintptr
-	queue    uintptr // dispatch_queue_t
-	streams  map[string]*fsStream
-	cleanupW sync.WaitGroup
-	internal chan Event
-	closed   bool
-	done     chan struct{}
-	exited   chan struct{}
+	events chan<- Event
+	errors chan<- error
+
+	mu          sync.Mutex
+	id          uintptr
+	queue       uintptr // dispatch_queue_t
+	streams     map[string]*fsStream
+	cleanupW    sync.WaitGroup
+	internalEv  chan Event
+	internalErr chan error
+	closed      bool
+	done        chan struct{}
+	exited      chan struct{}
 }
 
 // Global registry maps watcher IDs to watchers so the callback
@@ -208,14 +212,19 @@ func NewWatcher() (*Watcher, error) {
 
 	queue := _dispatchQueueCreate("github.com/gofsnotify/fsnotify\x00", 0)
 
+	events := make(chan Event, 64)
+	errors := make(chan error, 8)
 	w := &Watcher{
-		Events:   make(chan Event, 64),
-		Errors:   make(chan error, 8),
-		queue:    queue,
-		streams:  make(map[string]*fsStream),
-		internal: make(chan Event, 256),
-		done:     make(chan struct{}),
-		exited:   make(chan struct{}),
+		Events:      events,
+		Errors:      errors,
+		events:      events,
+		errors:      errors,
+		queue:       queue,
+		streams:     make(map[string]*fsStream),
+		internalEv:  make(chan Event, 256),
+		internalErr: make(chan error, 8),
+		done:        make(chan struct{}),
+		exited:      make(chan struct{}),
 	}
 	w.id = registerWatcher(w)
 	go w.readLoop()
@@ -227,14 +236,20 @@ func NewWatcher() (*Watcher, error) {
 // Errors, and exited, matching the pattern of the other backends.
 func (w *Watcher) readLoop() {
 	defer close(w.exited)
-	defer close(w.Events)
-	defer close(w.Errors)
+	defer close(w.events)
+	defer close(w.errors)
 
 	for {
 		select {
-		case ev := <-w.internal:
+		case ev := <-w.internalEv:
 			select {
-			case w.Events <- ev:
+			case w.events <- ev:
+			case <-w.done:
+				return
+			}
+		case err := <-w.internalErr:
+			select {
+			case w.errors <- err:
 			case <-w.done:
 				return
 			}
@@ -511,14 +526,14 @@ func isUnder(child, parent string) bool {
 
 func (w *Watcher) sendEvent(e Event) {
 	select {
-	case w.internal <- e:
+	case w.internalEv <- e:
 	case <-w.done:
 	}
 }
 
 func (w *Watcher) sendError(err error) {
 	select {
-	case w.Errors <- err:
+	case w.internalErr <- err:
 	case <-w.done:
 	}
 }

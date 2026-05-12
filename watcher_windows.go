@@ -34,9 +34,12 @@ type fileNotifyInformation struct {
 // Watcher monitors registered paths via ReadDirectoryChangesW.
 type Watcher struct {
 	// Events delivers change notifications. Closed when Close returns.
-	Events chan Event
+	Events <-chan Event
 	// Errors delivers non-fatal errors from the read loop. Closed when Close returns.
-	Errors chan error
+	Errors <-chan error
+
+	events chan<- Event
+	errors chan<- error
 
 	mu      sync.Mutex
 	port    windows.Handle
@@ -67,9 +70,13 @@ func NewWatcher() (*Watcher, error) {
 	if err != nil {
 		return nil, err
 	}
+	events := make(chan Event, 64)
+	errors := make(chan error, 8)
 	w := &Watcher{
-		Events:  make(chan Event, 64),
-		Errors:  make(chan error, 8),
+		Events:  events,
+		Errors:  errors,
+		events:  events,
+		errors:  errors,
 		port:    port,
 		watches: make(map[uintptr]*winWatch),
 		done:    make(chan struct{}),
@@ -217,8 +224,8 @@ func (ww *winWatch) startRead() error {
 
 func (w *Watcher) readLoop() {
 	defer close(w.exited)
-	defer close(w.Events)
-	defer close(w.Errors)
+	defer close(w.events)
+	defer close(w.errors)
 
 	for {
 		var (
@@ -281,11 +288,7 @@ func (w *Watcher) handleCompletion(key uintptr, n uint32) {
 			if name != "" {
 				full = filepath.Join(ww.path, name)
 			}
-			select {
-			case w.Events <- Event{Name: full, Op: op}:
-			case <-w.done:
-				return
-			}
+			w.sendEvent(Event{Name: full, Op: op})
 		}
 
 		if raw.NextEntryOffset == 0 {
@@ -319,16 +322,20 @@ func (w *Watcher) dropWatch(key uintptr) {
 	}
 	windows.CloseHandle(ww.handle)
 	if ww.op.Has(Remove) {
-		select {
-		case w.Events <- Event{Name: ww.path, Op: Remove}:
-		case <-w.done:
-		}
+		w.sendEvent(Event{Name: ww.path, Op: Remove})
+	}
+}
+
+func (w *Watcher) sendEvent(e Event) {
+	select {
+	case w.events <- e:
+	case <-w.done:
 	}
 }
 
 func (w *Watcher) sendError(err error) {
 	select {
-	case w.Errors <- err:
+	case w.errors <- err:
 	case <-w.done:
 	}
 }
