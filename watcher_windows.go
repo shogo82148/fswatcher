@@ -18,12 +18,12 @@ const (
 	watchBufferSize          = 4096
 	// FILE_NOTIFY_INFORMATION layout: 3 x uint32 then a flexible WCHAR[].
 	fileNotifyHeaderSize = 12
-	// ERROR_INVALID_HANDLE; not exposed by stdlib syscall.
+	// ERROR_INVALID_HANDLE; not exposed by x/sys/windows.
 	errorInvalidHandle = windows.Errno(6)
 )
 
 // fileNotifyInformation mirrors the Win32 FILE_NOTIFY_INFORMATION struct
-// since stdlib syscall does not expose it.
+	// since x/sys/windows exposes the needed helpers instead.
 type fileNotifyInformation struct {
 	NextEntryOffset uint32
 	Action          uint32
