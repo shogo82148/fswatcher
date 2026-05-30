@@ -123,7 +123,7 @@ func TestWatchFileWrite(t *testing.T) {
 }
 
 func TestKqueueCreateReportsChildRegistrationFailure(t *testing.T) {
-	if runtime.GOOS != "freebsd" {
+	if runtime.GOOS != "freebsd" && runtime.GOOS != "openbsd" {
 		t.Skip("kqueue regression test")
 	}
 	dir := tempDir(t)
