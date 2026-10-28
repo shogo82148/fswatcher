@@ -17,6 +17,14 @@
 //
 // Default output is one line per event: "OP\tPATH". Watcher errors are
 // always written to stderr.
+//
+// A PATH containing a control character (C0, DEL, or C1, including a raw
+// 0x80-0x9F byte that is not valid UTF-8) is printed in Go-quoted form
+// (strconv.Quote) in the default output and the -V event log, so a crafted
+// file name cannot forge extra lines or inject terminal escape sequences.
+// Legacy-encoded names (e.g. Shift_JIS) that contain such bytes are quoted
+// too. Other names are printed unchanged. Use -json for output that is
+// unambiguous for every name.
 package main
 
 import (
@@ -28,7 +36,10 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/fswatcher/fswatcher"
 )
@@ -92,7 +103,7 @@ func main() {
 				return
 			}
 			if *verbose {
-				log.Printf("event %s %s", ev.Op, ev.Name)
+				log.Printf("event %s %s", ev.Op, displayName(ev.Name))
 			}
 			switch {
 			case *execCmd != "":
@@ -102,7 +113,7 @@ func main() {
 					log.Printf("json encode: %v", err)
 				}
 			default:
-				fmt.Printf("%s\t%s\n", ev.Op, ev.Name)
+				fmt.Printf("%s\t%s\n", ev.Op, displayName(ev.Name))
 			}
 		case err, ok := <-w.Errors:
 			if !ok {
@@ -148,6 +159,22 @@ func runCommand(cmd string, ev fswatcher.Event) {
 			log.Printf("exec %q: %v", cmd, err)
 		}
 	}
+}
+
+// displayName returns name unchanged unless it contains a control
+// character, in which case it returns the strconv.Quote form. Control
+// characters are C0, DEL and C1 runes, plus raw 0x80-0x9F bytes that are
+// not valid UTF-8: an 8-bit terminal treats those as C1 controls (e.g.
+// 0x9B is CSI), so legacy-encoded names containing them are quoted too.
+// This keeps the "OP\tPATH" output one line per event and stops file
+// names from injecting terminal escape sequences.
+func displayName(name string) string {
+	for i, r := range name {
+		if unicode.IsControl(r) || (r == utf8.RuneError && name[i] >= 0x80 && name[i] <= 0x9f) {
+			return strconv.Quote(name)
+		}
+	}
+	return name
 }
 
 // filepathBase trims the directory portion of a program path without
