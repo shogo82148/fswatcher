@@ -33,6 +33,10 @@ type Watcher struct {
 	mu      sync.Mutex
 	port    windows.Handle
 	watches map[uintptr]*winWatch
+	// closing holds watches that were removed while a read was still
+	// outstanding. The kernel owns their buf and overlapped until that
+	// read's completion is dequeued, so they must stay reachable until then.
+	closing map[uintptr]*winWatch
 	nextKey uintptr
 	closed  bool
 	done    chan struct{}
@@ -51,6 +55,10 @@ type winWatch struct {
 	buf        [watchBufferSize]byte
 	overlapped windows.Overlapped
 	recursive  bool
+	// pending reports whether a ReadDirectoryChangesW issued on buf and
+	// overlapped has not been dequeued from the port yet. Guarded by
+	// Watcher.mu.
+	pending bool
 }
 
 // NewWatcher returns a Watcher backed by ReadDirectoryChangesW.
@@ -68,6 +76,7 @@ func NewWatcher() (*Watcher, error) {
 		errors:  errors,
 		port:    port,
 		watches: make(map[uintptr]*winWatch),
+		closing: make(map[uintptr]*winWatch),
 		done:    make(chan struct{}),
 		exited:  make(chan struct{}),
 	}
@@ -144,6 +153,7 @@ func (w *Watcher) add(path string, op Op, recursive bool) error {
 		windows.CloseHandle(handle)
 		return fmt.Errorf("fswatcher: add %s: %w", abs, err)
 	}
+	ww.pending = true
 	w.watches[key] = ww
 	return nil
 }
@@ -164,6 +174,9 @@ func (w *Watcher) Remove(path string) error {
 	for k, ww := range w.watches {
 		if pathKey(ww.path) == cmpKey {
 			delete(w.watches, k)
+			if ww.pending {
+				w.closing[k] = ww
+			}
 			if err := windows.CloseHandle(ww.handle); err != nil {
 				return fmt.Errorf("fswatcher: remove %s: %w", abs, err)
 			}
@@ -185,7 +198,10 @@ func (w *Watcher) Close() error {
 	}
 	w.closed = true
 	close(w.done)
-	for _, ww := range w.watches {
+	for k, ww := range w.watches {
+		if ww.pending {
+			w.closing[k] = ww
+		}
 		windows.CloseHandle(ww.handle)
 	}
 	w.watches = nil
@@ -193,9 +209,10 @@ func (w *Watcher) Close() error {
 	w.mu.Unlock()
 	// Wake any GetQueuedCompletionStatus waiter so the loop can observe done.
 	windows.PostQueuedCompletionStatus(port, 0, 0, nil)
-	err := windows.CloseHandle(port)
+	// The read loop drains the completions of the reads cancelled above
+	// before exiting, so the port must stay open until it has.
 	<-w.exited
-	return err
+	return windows.CloseHandle(port)
 }
 
 func (ww *winWatch) startRead() error {
@@ -223,9 +240,15 @@ func (w *Watcher) readLoop() {
 			overlapped *windows.Overlapped
 		)
 		err := windows.GetQueuedCompletionStatus(w.port, &bytesRead, &key, &overlapped, windows.INFINITE)
+		if overlapped != nil {
+			w.completeRead(key)
+		}
 		select {
 		case <-w.done:
-			return
+			if w.drained() {
+				return
+			}
+			continue
 		default:
 		}
 		if err != nil {
@@ -286,11 +309,42 @@ func (w *Watcher) handleCompletion(key uintptr, n uint32) {
 		off += raw.NextEntryOffset
 	}
 
-	if err := ww.startRead(); err != nil {
-		if !errors.Is(err, windows.ERROR_OPERATION_ABORTED) {
-			w.sendError(err)
+	// Re-arm only if ww is still registered: Remove or Close may have
+	// closed its handle while the buffer was being parsed. Holding mu
+	// keeps the handle open across the call.
+	w.mu.Lock()
+	var err error
+	if w.watches[key] == ww {
+		if err = ww.startRead(); err == nil {
+			ww.pending = true
 		}
 	}
+	w.mu.Unlock()
+	if err != nil && !errors.Is(err, windows.ERROR_OPERATION_ABORTED) {
+		w.sendError(err)
+	}
+}
+
+// completeRead records that the read outstanding for key has been
+// dequeued, after which the kernel no longer touches that watch's buf or
+// overlapped. A watch removed while its read was in flight is released
+// here.
+func (w *Watcher) completeRead(key uintptr) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if ww, ok := w.watches[key]; ok {
+		ww.pending = false
+		return
+	}
+	delete(w.closing, key)
+}
+
+// drained reports whether the completions of every read cancelled by
+// Remove or Close have been dequeued.
+func (w *Watcher) drained() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.closing) == 0
 }
 
 // dropWatch removes the watch entry for key if it is still present and
