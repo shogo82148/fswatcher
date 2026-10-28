@@ -49,6 +49,10 @@ func canonicalizeOS(p string) string {
 		if err != nil {
 			return p
 		}
+		if int(n) >= len(buf) {
+			// The long form grew between the two calls; give up.
+			return p
+		}
 	}
 	return syscall.UTF16ToString(buf[:n])
 }
