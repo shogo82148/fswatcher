@@ -267,12 +267,21 @@ func (w *Watcher) handleEvent(ev *unix.Kevent_t) {
 
 	if fflags&(unix.NOTE_DELETE|unix.NOTE_RENAME) != 0 {
 		w.mu.Lock()
+		// w.mu was released while sending events, so Remove or Close may
+		// have already closed this watch; its fd numbers may since have
+		// been reused, so closing them again would be unsafe.
+		if w.closed || w.byFd[ww.fd] != ww {
+			w.mu.Unlock()
+			return
+		}
 		if parent != nil {
-			delete(parent.children, filepath.Base(path))
-		} else {
+			if name := filepath.Base(path); parent.children[name] == ww {
+				delete(parent.children, name)
+			}
+		} else if key := pathKey(path); w.roots[key] == ww {
 			// Root watch went away; drop it from the user-facing map so
 			// the path can be re-added.
-			delete(w.roots, pathKey(path))
+			delete(w.roots, key)
 		}
 		// Recursively close the dropped node and every descendant so deep
 		// subtrees do not leak fds when an interior directory disappears.
@@ -296,7 +305,9 @@ func (w *Watcher) diffDir(dir *kqWatch, requested Op) {
 	var registerErrs []error
 
 	w.mu.Lock()
-	if w.closed {
+	// Skip a watch that Remove dropped while w.mu was released, so we do
+	// not attach children that nothing would ever close.
+	if w.closed || w.byFd[dir.fd] != dir {
 		w.mu.Unlock()
 		return
 	}
